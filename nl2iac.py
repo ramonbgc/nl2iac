@@ -18,11 +18,9 @@ import nl2iac_agent
 PROJECT_ID = "rgc-tfg-uoc"
 REGION = "us-central1"
 # models
-GOOGLE_MODEL_ID = "gemini-1.5-pro-preview-0409"
+GOOGLE_MODEL_ID = "gemini-1.5-pro-preview-0514"
 OPENAI_MODEL_ID = "gpt-4-turbo"
 TEMPERATURE = 0.2
-#PRIMARY_MODEL_ID = "gemini-1.0-pro-002"
-SECONDARY_MODEL_ID = "code-bison"
 # generals
 MAX_RETRIES = 3
 DEPLOY_INFRA = False
@@ -45,14 +43,10 @@ os.environ["LANGCHAIN_PROJECT"] = "nl2IaC"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = st.secrets['LANGCHAIN_API_KEY']  # Update to your API key
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = '/home/mon/rgc-tfg-uoc-3a70fbac5ccd.json'
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = st.secrets['GOOGLE_APPLICATION_CREDENTIALS']
 
 if "parameters" not in st.session_state:
   st.session_state["parameters"] = f"""\nConfiguration:\nproject: {PROJECT_ID}, region: {REGION}\n"""
-if "user_prompt" not in st.session_state:
-  st.session_state["user_prompt"] = """Create two Compute Engine instance with debian images.
-  The name of the instance are rgc-vm-xx where xx is a two digit sequential number.
-  Create a network and subnetwork specific for this vm, name it rgc-net-01"""
 
 
 #######################################################
@@ -85,18 +79,17 @@ def upload_image_and_generate_description():
     # if an image is being used a description must be obtained
     image_message =  {
       "type": "image_url",
-      "image_url": {"url": f"""data:image/jpeg;base64,
-                    {file_base64}"""},
+      "image_url": {"url": f"""data:image/jpeg;base64,{file_base64}"""},
     }
     text_message = {
         "type": "text",
-        "text": PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE + '\nConfiguration:\n' + st.session_state["parameters"],
+        "text": PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE + st.session_state["parameters"],
     }
     content = [image_message, text_message]
     message = [HumanMessage(content=content)]
     image_description = st.session_state['tf_developer_agent'].invoke(
       {'user_message': message},
-      config=st.session_state['cfg'])
+      config=RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_image)]))
     st.session_state['solution_description'] = image_description['output']
     add_status_message("Image description generated", 'info')
 
@@ -119,7 +112,7 @@ def generate_template():
     if 'candidate_terraform_template' not in st.session_state:
       st.session_state['candidate_terraform_template'] = st.session_state['tf_developer_agent'].invoke(
         {'user_message': message},
-        config=st.session_state['cfg'])
+        config = RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_generate)]))
       add_status_message("Candidate template generated", 'info')
   else:
     add_status_message("Provide a text or a file describing the architecture of the solution", 'error')
@@ -129,11 +122,10 @@ def validate_template():
   """Validating the template."""
   if ('tf_validation' not in st.session_state) or (st.session_state['tf_validation']['valid'] is not True):
     # validating the generated template
-    # preparing the callback between streamlit and langchain to provide feedback
     st.session_state['terraform_template_validation'] = st.session_state['tf_validation_agent'].invoke(
       {'user_message': [HumanMessage(
         content='Template to check:\n' + st.session_state['candidate_terraform_template']['output'])]},
-        config=st.session_state['cfg'])
+        config = RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_validate)]))
 
     st.session_state['tf_validation'] = json.loads(st.session_state['terraform_template_validation']['output'])
     st.session_state['tf_validation_valid'] = st.session_state['tf_validation']['valid']
@@ -156,6 +148,7 @@ def validate_template():
       st.session_state['code_exp'].code(st.session_state['candidate_terraform_template']['output'], language="json")
       # creating a button to deploy the template
       st.session_state['code_exp'].button('Deploy template', key='deploy_button', type='primary')
+
     else:
       add_status_message("Candidate template not correct after validation.", 'error')
       code_expander_label = "red:[Generated Template WITH ERRORS]"
@@ -180,7 +173,7 @@ def deploy_template():
   st.session_state['terraform_template_deploy'] = st.session_state['tf_validation_agent'].invoke(
     {'user_message': [HumanMessage(
       content='Deploy the already created Terraform template')]},
-      config=st.session_state['cfg'])
+      config=RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_deploy)]))
 
   # as the output returned is a json let's format it
   tmp_output = (st.session_state['terraform_template_deploy']['output']).replace("\n", "").replace("False", "false")
@@ -191,6 +184,7 @@ def deploy_template():
     # showing suggestions if available
     add_status_message("Terraform apply executed Ok.", 'success')
     st.session_state['code_exp'].success("Template is being deployed. Please check status on cloud. ", icon="✅")
+
   else:
     add_status_message("Error deploying template (errors above template).", 'error')
     tmp_error = 'Error deploying template: ' + '. '.join(tf_deploy_result['errors'])
@@ -209,9 +203,11 @@ def submit_on_change():
   if 'candidate_terraform_template' in st.session_state:
     # deleting the previously generated candidate template
     del st.session_state['candidate_terraform_template']
+
   if 'tf_validation' in st.session_state:
     # the validation
     del st.session_state['tf_validation']
+
   if 'terraform_template' in st.session_state:
     # and the validated template
     del st.session_state['terraform_template']
@@ -227,7 +223,7 @@ def keeping_state_messages():
 def keeping_state_image():
   """Keeping the state for the image and description"""
   st.session_state['img_exp'] = image_cont.expander(label='Image uploaded.', expanded=True)
-  st.session_state['img_exp'].image(uploaded_file, caption= "Content Image", use_column_width = True)
+  st.session_state['img_exp'].image(uploaded_file, caption= "Content Image")
   st.session_state['img_exp'].success(st.session_state['solution_description'], icon="✅")
 
 
@@ -246,8 +242,10 @@ def new_agent_on_change_settings():
     del st.session_state['tf_developer_agent']
 
 
-#########################
-#########################
+##################################################
+##################################################
+# app
+
 # setting wide mode
 st.set_page_config(layout="wide")
 # starting streamlit app
@@ -287,7 +285,7 @@ with st.sidebar:
 if st.session_state.provider_id.lower() == 'openai':
   os.environ["OPENAI_API_KEY"] = st.session_state.api_key
 
-# creating terraform agents
+# creating LLM agents
 if "tf_developer_agent" not in st.session_state:
   st.session_state['tf_developer_agent'] = nl2iac_agent.terraform_developer_agent(
     provider_id=st.session_state.provider_id, model_id=st.session_state.model_id,
@@ -312,20 +310,17 @@ with main_col:
 with info_col:
   status_tab, detailed_tab = st.tabs(["Status Info", "Detailed steps"])
   with detailed_tab:
-    detailed_tab_cont = st.container()
-  with status_tab:
-    status_tab_cont = st.container(height=1000)
+    detailed_tab_image = st.container()
+    detailed_tab_generate = st.container()
+    detailed_tab_validate = st.container()
+    detailed_tab_deploy = st.container()
 
-# creating callback for the agents if not already created
-if 'st_callback' not in st.session_state:
-  st_callback = StreamlitCallbackHandler(detailed_tab_cont)
-  st.session_state['cfg'] = RunnableConfig()
-  st.session_state['cfg']['callbacks'] = [st_callback]
+  with status_tab:
+    status_tab_cont = st.container()
 
 # restoring status:
 keeping_state_messages()
 
-# app operations start
 # when a file has been uploaded
 if uploaded_file is not None:
   upload_image_and_generate_description()
@@ -361,5 +356,6 @@ if submit_button:
   if 'tf_validation_valid' in st.session_state:
     del st.session_state['tf_validation_valid']
 
+# deploying if clicked
 if ('deploy_button' in st.session_state) and (st.session_state.deploy_button):
   deploy_template()

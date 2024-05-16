@@ -1,5 +1,5 @@
 """Imports"""
-import logging
+#import logging
 import subprocess
 import json
 # langchain
@@ -21,9 +21,7 @@ TERRAFORM_RESOURCES_DESCRIPTION = ["terraform", "providers", "schema", "-json"]
 TERRAFORM_RESOURCES_FILTER = ['google_compute_']
 # logging
 LOGGING_FORMAT = "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
-# generals
-MAX_RETRIES = 1
-DEPLOY_INFRA = False
+
 # prompts
 PROMPT_TERRAFORM_DEVELOPER_LAST = """
   You're a Terraform seasoned developer being able to get information from terraform commands, to identify the terraform resources involved in a solution design, and to generate terraform templates.
@@ -89,7 +87,7 @@ def get_available_terraform_resources(output_type: str):
       the command: terraform providers schema -json
       Returns a list or a dict based on output_type
   """
-  logger.debug('Getting the resources available for the provider')
+  #logger.debug('Getting the resources available for the provider')
   # getting the full list from terraform command as a dict
   res_list_str = terraform_commands(TERRAFORM_RESOURCES_DESCRIPTION, 'desc')
   provider_resources_dict = json.loads(res_list_str)['provider_schemas']\
@@ -172,12 +170,11 @@ def create_agent(llm_model: ChatVertexAI, agent_tools: list, system: str):
 #################################################
 @tool
 def get_provider_resources() -> dict:
-  """Return a list of allowed resources by the provider and all the attributes dependencies.
-      Use it to return all the resources you can use for the provider in use.
+  """Return a list of allowed resources by the provider to be used on the templates.
   """
-  logger.info('(tool) Getting a list of the resources')
+  #logger.info('(tool) Getting a list of the resources')
   output = get_available_terraform_resources("list")
-  logger.debug('(tool) Provider resources: %s', output)
+  #logger.debug('(tool) Provider resources: %s', output)
   # returning a string with the resources
   return {'resources_list': output}
 
@@ -192,7 +189,7 @@ def get_required_arguments_list(resources_names: str) -> dict:
         resources_names: a python list formated string with the terraform resources already identified.
   """
   # creating a list os resources
-  logger.debug('Input string. resources_names: %s', resources_names)
+  #logger.debug('Input string. resources_names: %s', resources_names)
   list_resources = json.loads(resources_names)
   # getting REQUIRED arguments and blocks for every resource
   # calling the aux function
@@ -220,12 +217,12 @@ def get_required_arguments_list(resources_names: str) -> dict:
 
 @tool
 def terraform_template_validate(terraform_template: str) -> dict:
-  """ Validate a template using the 'terraform validate' command.
+  """ Validate an already generate template using the 'terraform validate' command.
 
       Args:
         terraform_template: The terraform template to be validated.
   """
-  logger.info('terraform_template_validation EXECUTION')
+  #logger.info('terraform_template_validation EXECUTION')
   # to use terraform validate a file must be created on the local system
   with open("main.tf", "w", encoding="utf8") as file_template:
     file_template.write(clean_str(terraform_template))
@@ -239,12 +236,12 @@ def terraform_template_validate(terraform_template: str) -> dict:
 
 @tool
 def terraform_template_plan(terraform_template: str) -> dict:
-  """ Validate a template using the 'terraform plan' command.
+  """ Validate an already generate template using the 'terraform plan' command.
 
       Args:
         terraform_template: The terraform template to be validated.
   """
-  logger.info('terraform_template_validation EXECUTION')
+  #logger.info('terraform_template_validation EXECUTION')
   # to use terraform validate a file must be created on the local system
   with open("main.tf", "w", encoding="utf8") as file_template:
     file_template.write(clean_str(terraform_template))
@@ -258,9 +255,9 @@ def terraform_template_plan(terraform_template: str) -> dict:
 
 @tool
 def terraform_apply():
-  """ Deploy a template already validated using the 'Terraform Apply' command.
+  """ Deploy a template already generated and validated using the 'Terraform Apply' command.
   """
-  logger.info('terraform_apply EXECUTION')
+  #logger.info('terraform_apply EXECUTION')
   # getting the full list from terraform command as a dict
   deployment_errors = terraform_commands(TERRAFORM_APPLY)
   return {'deployment_errors' : deployment_errors}
@@ -294,5 +291,5 @@ def terraform_validator_agent(provider_id, model_id, temperature,
   return agent
 
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(format=LOGGING_FORMAT, level=logging.INFO)
+# logger = logging.getLogger(__name__)
+# logging.basicConfig(format=LOGGING_FORMAT, level=logging.INFO)
