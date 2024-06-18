@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from PIL import Image
 import streamlit as st
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 from langsmith import Client
@@ -17,21 +17,22 @@ import nl2iac_agent
 # variables
 PROJECT_ID = "rgc-tfg-uoc"
 REGION = "us-central1"
+st.session_state['PROJECT_ID'] = st.secrets['PROJECT_ID']
 # models
-GOOGLE_MODEL_ID = "gemini-1.5-pro-preview-0514"
+GOOGLE_MODEL_ID = "gemini-1.5-pro-001"
 OPENAI_MODEL_ID = "gpt-4-turbo"
-TEMPERATURE = 0.2
+TEMPERATURE = 0.0
 # generals
 MAX_RETRIES = 3
 DEPLOY_INFRA = False
 # prompt
 PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE = """
-  You are a Google cloud architect guru. Your job is to create a text describing the components represented on the provided image.
+  You are a Google cloud architect guru. Your job is to create a text describing all the components represented on the provided image.
 
   Guidelines:
-  - Identify all the Google cloud components drawn in the image.
-  - Be as concrete as possible with the configurations and parameters.
-  - The output must be a plain text without format that describes the components and properties represented in the image.
+  - Identify all the Google cloud components drawn in the image and don't miss anyone of them.
+  - List and describe one by one every component with the provided configurations for each one without missing anyone.
+  - Provide as many details as possible with the configurations and parameters, but don't make up any info.
   - Append the provided Configuration in the output as well.
 
   """
@@ -39,15 +40,10 @@ PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE = """
 ##################
 # system variables
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "nl2IaC"
+os.environ["LANGCHAIN_PROJECT"] = st.secrets['LANGCHAIN_PROJECT']
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = st.secrets['LANGCHAIN_API_KEY']  # Update to your API key
-
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = st.secrets['GOOGLE_APPLICATION_CREDENTIALS']
-
-if "parameters" not in st.session_state:
-  st.session_state["parameters"] = f"""\nConfiguration:\nproject: {PROJECT_ID}, region: {REGION}\n"""
-
 
 #######################################################
 #######################################################
@@ -96,8 +92,8 @@ def upload_image_and_generate_description():
     # saving the file for later checks
     st.session_state['file_base64'] = file_base64
 
-  else:
-    add_status_message("File unchanged, no need to generate a description again.", 'info')
+  # else:
+  #   add_status_message("File unchanged, no need to generate a description again.", 'info')
 
 
 def generate_template():
@@ -122,10 +118,14 @@ def validate_template():
   """Validating the template."""
   if ('tf_validation' not in st.session_state) or (st.session_state['tf_validation']['valid'] is not True):
     # validating the generated template
-    st.session_state['terraform_template_validation'] = st.session_state['tf_validation_agent'].invoke(
+    st.session_state['terraform_template_validation'] = st.session_state['tf_validator_agent'].invoke(
       {'user_message': [HumanMessage(
-        content='Template to check:\n' + st.session_state['candidate_terraform_template']['output'])]},
-        config = RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_validate)]))
+        content='Validate this terraform template calling the available functions:\n' + nl2iac_agent.clean_str(
+          st.session_state['candidate_terraform_template']['output']))]},
+        config = RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_generate)]))
+
+    mess_clean = nl2iac_agent.clean_str(st.session_state['terraform_template_validation']['output'])
+    st.session_state['tf_validation'] = json.loads(mess_clean)
 
     st.session_state['tf_validation'] = json.loads(st.session_state['terraform_template_validation']['output'])
     st.session_state['tf_validation_valid'] = st.session_state['tf_validation']['valid']
@@ -151,14 +151,14 @@ def validate_template():
 
     else:
       add_status_message("Candidate template not correct after validation.", 'error')
-      code_expander_label = "red:[Generated Template WITH ERRORS]"
+
       st.session_state['code_exp'].error(st.session_state['tf_validation']['errors'], icon="🚨")
       # showing the incorrect template template
       st.session_state['code_exp'].code(st.session_state['candidate_terraform_template']['output'], language="json")
-      code_expander_expanded = False
+
       # adding (not replacing) errors to be resolved
       st.session_state['previous_error'] = st.session_state.get('previous_error', '') \
-        + '\nSolve the following error made when generating the previous template: ' \
+        + '\nKeep the names and components on the description, but solve the following error made while creating the previous template: ' \
         + ". ".join(st.session_state['tf_validation']['errors'])
       add_status_message(f"Retrying generation... {st.session_state['validate_retry_number']}/{MAX_RETRIES}", 'info')
       del st.session_state['candidate_terraform_template']
@@ -166,17 +166,16 @@ def validate_template():
       shutil.copyfile('main.tf.bk', 'main.tf')
 
 
-
 def deploy_template():
   """Deploying the template."""
   # calling the agent to deploy the template
-  st.session_state['terraform_template_deploy'] = st.session_state['tf_validation_agent'].invoke(
+  st.session_state['terraform_template_deploy'] = st.session_state['tf_deployer_agent'].invoke(
     {'user_message': [HumanMessage(
-      content='Deploy the already created Terraform template')]},
+      content='Deploy the already created Terraform template.')]},
       config=RunnableConfig(callbacks=[StreamlitCallbackHandler(detailed_tab_deploy)]))
 
   # as the output returned is a json let's format it
-  tmp_output = (st.session_state['terraform_template_deploy']['output']).replace("\n", "").replace("False", "false")
+  tmp_output = nl2iac_agent.clean_str(st.session_state['terraform_template_deploy']['output'])
   tf_deploy_result = json.loads(tmp_output)
   # keeping the state for the widgets
   st.session_state['code_exp'] = state_cont.expander('Generated Template', expanded=True)
@@ -192,10 +191,32 @@ def deploy_template():
     tmp_suggestions = 'Suggestions to solve the deployment errors: ' + '. '.join(tf_deploy_result['suggestions'])
     st.session_state['code_exp'].info(tmp_suggestions, icon="ℹ️")
 
-  # showing the validate template
-  st.session_state['code_exp'].code(st.session_state['candidate_terraform_template']['output'], language="json")
-  # creating a button to deploy the template
-  st.session_state['code_exp'].button('Deploy template', key='deploy_button', type='primary')
+    # showing the validate template
+    st.session_state['code_exp'].code(st.session_state['candidate_terraform_template']['output'], language="json")
+    # creating a button to deploy the template
+    st.session_state['code_exp'].button('Deploy template', key='deploy_button', type='primary')
+
+
+def deploy_template_gemini():
+  """Deploying the template."""
+  # creating a gemini model and binding the tools
+  model = nl2iac_agent.create_model(provider_id=st.session_state.provider_id,
+                                    model_id=st.session_state.model_id,
+                                    temperature=st.session_state.temperature,
+                                    region_id=st.session_state.region_id,
+                                    project_id=st.session_state.project_id)
+
+  gemini_tools = [nl2iac_agent.terraform_apply]
+  model_with_tools = model.bind_tools(tools=gemini_tools)
+  messages = [SystemMessage(content=nl2iac_agent.PROMPT_TERRAFORM_DEPLOYER),
+              HumanMessage(content='Deploy the already created Terraform template.')]
+  st.session_state['terraform_template_deploy'] = model_with_tools.invoke(messages)
+  print(st.session_state['terraform_template_deploy'].tool_calls)
+
+  # as the output returned is a json let's format it
+  tmp_output = nl2iac_agent.clean_str(st.session_state['terraform_template_deploy']['output'])
+  tf_deploy_result = json.loads(tmp_output)
+  print(tf_deploy_result)
 
 
 def submit_on_change():
@@ -262,37 +283,50 @@ with st.sidebar:
   st.markdown("<h1 style='text-align: center;'>Settings</h1>", unsafe_allow_html=True)
   st.radio("Choose provider to use:", ['OpenAI', 'Google'], horizontal=True,
            key='provider_id', on_change=new_agent_on_change_settings)
+  empty_model = st.empty()
+  temperature_empty = st.empty()
+
+  st.text_input("Project ID: ", value=st.session_state['PROJECT_ID'], key='project_id')
+  st.text_input("Region: ", value=REGION, key='region_id')
+
   if st.session_state.provider_id.lower() == 'openai':
-    st.text_input("Model Id: ", value=OPENAI_MODEL_ID,
+    empty_model.text_input("Model Id: ", value=OPENAI_MODEL_ID,
                   key='model_id', on_change=new_agent_on_change_settings)
-    st.slider(label='Temperature', key='temperature',
+    temperature_empty.slider(label='Temperature', key='temperature',
               min_value=0.0, max_value=1.0, step=0.1,
               value=TEMPERATURE, on_change=new_agent_on_change_settings)
     st.text_input("API KEY: ",
                   value=st.secrets["OPENAI_API_KEY"],
                   type="password", key='api_key')
   else:
-    st.text_input("Model Id: ", value=GOOGLE_MODEL_ID,
+    empty_model.text_input("Model Id: ", value=GOOGLE_MODEL_ID,
                   key='model_id', on_change=new_agent_on_change_settings)
-    st.slider(label='Temperature', key='temperature',
+    temperature_empty.slider(label='Temperature', key='temperature',
               min_value=0.0, max_value=2.0, step=0.1,
               value=TEMPERATURE, on_change=new_agent_on_change_settings)
-    st.text_input("Project ID: ", value=PROJECT_ID, key='project_id')
-    st.text_input("Region: ", value=REGION, key='region_id')
 
+# updating variables with the config provided values
 
-# updating the OPENAI API KEY environment variable if updated
 if st.session_state.provider_id.lower() == 'openai':
   os.environ["OPENAI_API_KEY"] = st.session_state.api_key
+if "parameters" not in st.session_state:
+  st.session_state["parameters"] = f"""\nConfiguration:\nproject: {
+    st.session_state['project_id']}, region: {st.session_state['region_id']}\n"""
 
 # creating LLM agents
 if "tf_developer_agent" not in st.session_state:
   st.session_state['tf_developer_agent'] = nl2iac_agent.terraform_developer_agent(
     provider_id=st.session_state.provider_id, model_id=st.session_state.model_id,
-    temperature=st.session_state.temperature)
-  st.session_state['tf_validation_agent'] = nl2iac_agent.terraform_validator_agent(
+    temperature=st.session_state.temperature, project_id=st.session_state.project_id,
+    region_id=st.session_state.region_id)
+  st.session_state['tf_validator_agent'] = nl2iac_agent.terraform_validator_agent(
     provider_id=st.session_state.provider_id, model_id=st.session_state.model_id,
-    temperature=st.session_state.temperature)
+    temperature=st.session_state.temperature, project_id=st.session_state.project_id,
+    region_id=st.session_state.region_id)
+  st.session_state['tf_deployer_agent'] = nl2iac_agent.terraform_deployer_agent(
+    provider_id=st.session_state.provider_id, model_id=st.session_state.model_id,
+    temperature=st.session_state.temperature, project_id=st.session_state.project_id,
+    region_id=st.session_state.region_id)
 
 # layout of the app
 main_col, info_col = st.columns([0.7, 0.3], gap='medium')
@@ -357,5 +391,14 @@ if submit_button:
     del st.session_state['tf_validation_valid']
 
 # deploying if clicked
+# deploying if clicked
 if ('deploy_button' in st.session_state) and (st.session_state.deploy_button):
-  deploy_template()
+  #deploy_template_gemini()
+  try:
+    deploy_template()
+  except json.JSONDecodeError as e:
+    # restarting the retries count
+    if 'true' in nl2iac_agent.clean_str(st.session_state['terraform_template_deploy']['output']).lower():
+      # showing suggestions if available
+      add_status_message("Terraform apply executed Ok.", 'success')
+      st.session_state['code_exp'].success("Template is being deployed. Please check status on cloud. ", icon="✅")
