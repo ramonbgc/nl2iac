@@ -1,5 +1,5 @@
 # Configure Google Cloud provider (replace with your project ID and region)
 provider "google" {
-  project = "rgc-tfg-uoc"
+  project = "YourProjectName"
   region  = "us-central1"
 }
