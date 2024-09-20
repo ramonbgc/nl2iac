@@ -18,8 +18,12 @@ pip install -r requirements.txt
 
 ```sh
 GOOGLE_APPLICATION_CREDENTIALS = "PathToYourServiceAccountJSONFile"
-LANGCHAIN_API_KEY = "YourLangChainApiKey"
-LANGCHAIN_PROJECT = "YourLangChainProjectName"
-OPENAI_API_KEY = "YourOpenAIApiKey"
+REGION = "GCPProjectRegion"
 PROJECT_ID = "YourGCPProjectId"
+GOOGLE_MODEL_ID = "gemini-1.5-flash" #default Google Model
+MULTIPROVIDER = "False"
+LANGCHAIN_API_KEY = "YourLangChainApiKey" # leave it blank if not in use
+LANGCHAIN_PROJECT = "YourLangChainProjectName" # leave it blank if not in use
+OPENAI_API_KEY = "YourOpenAIApiKey" # leave it blank if not in use
+OPENAI_MODEL_ID = "gpt-4o" #default OpenAI Model
 ```
