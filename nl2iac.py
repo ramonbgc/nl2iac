@@ -21,17 +21,22 @@ REGION_2 = "us-west1"
 REGION_3 = "us-west4"
 REGION_4 = "us-east4"
 
+st.session_state['MULTIPROVIDER'] = st.secrets['MULTIPROVIDER']
 st.session_state['PROJECT_ID'] = st.secrets['PROJECT_ID']
+st.session_state['REGION'] = st.secrets['REGION']
+st.session_state['GOOGLE_MODEL_ID'] = st.secrets['GOOGLE_MODEL_ID']
+st.session_state['OPENAI_MODEL_ID'] = st.secrets['OPENAI_MODEL_ID']
 # models
-GOOGLE_MODEL_ID = "gemini-1.5-pro-preview-0514"
-OPENAI_MODEL_ID = "gpt-4-turbo"
+PROVIDERS = ['Google']
 TEMPERATURE = 0.0
 # generals
 MAX_RETRIES = 3
-DEPLOY_INFRA = False
+
 # prompt
 PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE = """
   You are a Google cloud architect guru. Your job is to create a text describing the components represented on the provided image.
+  Don't do anything else but the steps mentioned next.
+  Write the output to be ready to be passed as a description to an agent that will generate a template with the info provided.
 
   Guidelines:
   - Identify all the Google cloud components drawn in the image.
@@ -44,12 +49,13 @@ PROMPT_IDENTIFY_GCP_COMPONENTS_FROM_IMAGE = """
 
 ##################
 # system variables
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = st.secrets['LANGCHAIN_PROJECT']
-os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGCHAIN_API_KEY"] = st.secrets['LANGCHAIN_API_KEY']  # Update to your API key
-
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = st.secrets['GOOGLE_APPLICATION_CREDENTIALS']
+# enabling or disabling tracing based on configuration
+if st.secrets['LANGCHAIN_API_KEY'] != "":
+  os.environ["LANGCHAIN_TRACING_V2"] = "true"
+  os.environ["LANGCHAIN_PROJECT"] = st.secrets['LANGCHAIN_PROJECT']
+  os.environ["LANGCHAIN_ENDPOINT"] = "https://eu.api.smith.langchain.com"
+  os.environ["LANGCHAIN_API_KEY"] = st.secrets['LANGCHAIN_API_KEY']  # Update with your API key
 
 
 #######################################################
@@ -305,25 +311,29 @@ st.set_page_config(layout="wide")
 # starting streamlit app
 st.title("NL2IaC")
 # logging into langsmith
-client = Client()
+if st.secrets['LANGCHAIN_API_KEY'] != "":
+  client = Client()
 
 # initializing message history
 if 'history_status_message' not in st.session_state:
   st.session_state['history_status_message'] = []
 
 # creating a side bar for config purposes
+if st.session_state['MULTIPROVIDER'] == "True":
+  PROVIDERS = ['Google', 'OpenAI']
+
 with st.sidebar:
   st.markdown("<h1 style='text-align: center;'>Settings</h1>", unsafe_allow_html=True)
-  st.radio("Choose provider to use:", ['OpenAI', 'Google'], horizontal=True,
-           key='provider_id', on_change=new_agent_on_change_settings)
+  st.radio("Choose provider to use:", PROVIDERS, horizontal=True,
+          key='provider_id', on_change=new_agent_on_change_settings)
   empty_model = st.empty()
   temperature_empty = st.empty()
 
   st.text_input("Project ID: ", value=st.session_state['PROJECT_ID'], key='project_id')
-  st.text_input("Region: ", value=REGION, key='region_id')
+  st.text_input("Region: ", value=st.session_state['REGION'], key='region_id')
 
   if st.session_state.provider_id.lower() == 'openai':
-    empty_model.text_input("Model Id: ", value=OPENAI_MODEL_ID,
+    empty_model.text_input("Model Id: ", value=st.session_state['OPENAI_MODEL_ID'],
                   key='model_id', on_change=new_agent_on_change_settings)
     temperature_empty.slider(label='Temperature', key='temperature',
               min_value=0.0, max_value=1.0, step=0.1,
@@ -332,7 +342,7 @@ with st.sidebar:
                   value=st.secrets["OPENAI_API_KEY"],
                   type="password", key='api_key')
   else:
-    empty_model.text_input("Model Id: ", value=GOOGLE_MODEL_ID,
+    empty_model.text_input("Model Id: ", value=st.session_state['GOOGLE_MODEL_ID'],
                   key='model_id', on_change=new_agent_on_change_settings)
     temperature_empty.slider(label='Temperature', key='temperature',
               min_value=0.0, max_value=2.0, step=0.1,
